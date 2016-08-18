@@ -1,0 +1,149 @@
+/*
+(C) Copyright 2015 Somonar B.V.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+
+ */
+
+import org.apache.tools.ant.filters.ReplaceTokens
+
+def developerGroup = 'Application Developers'
+
+
+task createComponent(group: developerGroup, description: 'Create the layout of an OFBiz component in the hot-deploy folder.') << {
+
+    def filterTokens = ['component-name': componentName,
+                        'component-resource-name': componentResourceName,
+                        'webapp-name': webappName,
+                        'base-permission': basePermission]
+    def templateDir = "${rootDir}/framework/resources/templates"
+    def componentDir = "${rootDir}/hot-deploy/${componentName}"
+
+    logger.info('Creating a component with the following properties: ')
+    logger.info(" - componentName: ${componentName}")
+    logger.info(" - componentResourceName: ${componentResourceName}")
+    logger.info(" - webappName: ${webappName}")
+    logger.info(" - basePermission: ${basePermission}")
+
+    mkdir componentDir
+    mkdir componentDir+"/config"
+    mkdir componentDir+"/data"
+    mkdir componentDir+"/data/helpdata"
+    mkdir componentDir+"/dtd"
+    mkdir componentDir+"/documents"
+    mkdir componentDir+"/entitydef"
+    mkdir componentDir+"/lib"
+    mkdir componentDir+"/patches"
+    mkdir componentDir+"/patches/test"
+    mkdir componentDir+"/patches/qa"
+    mkdir componentDir+"/patches/production"
+    mkdir componentDir+"/script"
+    mkdir componentDir+"/servicedef"
+    mkdir componentDir+"/src"
+    mkdir componentDir+"/testdef"
+    mkdir componentDir+"/webapp"
+    mkdir componentDir+"/webapp/${webappName}"
+    mkdir componentDir+"/webapp/${webappName}/error"
+    mkdir componentDir+"/webapp/${webappName}/WEB-INF"
+    mkdir componentDir+"/webapp/${webappName}/WEB-INF/actions"
+    mkdir componentDir+"/widget/"
+
+    generateFileFromTemplate(templateDir+"/ofbiz-component.xml", componentDir,
+            filterTokens, "ofbiz-component.xml")
+    generateFileFromTemplate(templateDir+"/TypeData.xml", componentDir+"/data",
+            filterTokens, "${componentResourceName}TypeData.xml")
+    generateFileFromTemplate(templateDir+"/SecurityPermissionSeedData.xml", componentDir+"/data",
+            filterTokens, "${componentResourceName}SecurityPermissionSeedData.xml")
+    generateFileFromTemplate(templateDir+"/SecurityGroupDemoData.xml", componentDir+"/data",
+            filterTokens, "${componentResourceName}SecurityGroupDemoData.xml")
+    generateFileFromTemplate(templateDir+"/DemoData.xml", componentDir+"/data",
+            filterTokens, "${componentResourceName}DemoData.xml")
+    generateFileFromTemplate(templateDir+"/HELP.xml", componentDir+"/data/helpdata",
+            filterTokens, "HELP_${componentResourceName}.xml")
+    generateFileFromTemplate(templateDir+"/document.xml", componentDir+"/documents",
+            filterTokens, "${componentResourceName}.xml")
+    generateFileFromTemplate(templateDir+"/entitymodel.xml", componentDir+"/entitydef",
+            filterTokens, "entitymodel.xml")
+    generateFileFromTemplate(templateDir+"/services.xml", componentDir+"/servicedef",
+            filterTokens, "services.xml")
+    generateFileFromTemplate(templateDir+"/Tests.xml", componentDir+"/testdef",
+            filterTokens, "${componentResourceName}Tests.xml")
+    generateFileFromTemplate(templateDir+"/UiLabels.xml", componentDir+"/config",
+            filterTokens, "${componentResourceName}UiLabels.xml")
+    generateFileFromTemplate(templateDir+"/index.jsp", componentDir+"/webapp/${webappName}",
+            filterTokens, "index.jsp")
+    generateFileFromTemplate(templateDir+"/error.jsp", componentDir+"/webapp/${webappName}/error",
+            filterTokens, "error.jsp")
+    generateFileFromTemplate(templateDir+"/controller.xml", componentDir+"/webapp/${webappName}/WEB-INF",
+            filterTokens, "controller.xml")
+    generateFileFromTemplate(templateDir+"/web.xml", componentDir+"/webapp/${webappName}/WEB-INF",
+            filterTokens, "web.xml")
+    generateFileFromTemplate(templateDir+"/CommonScreens.xml", componentDir+"/widget",
+            filterTokens, "CommonScreens.xml")
+    generateFileFromTemplate(templateDir+"/Screens.xml", componentDir+"/widget",
+            filterTokens, "${componentResourceName}Screens.xml")
+    generateFileFromTemplate(templateDir+"/Menus.xml", componentDir+"/widget",
+            filterTokens, "${componentResourceName}Menus.xml")
+    generateFileFromTemplate(templateDir+"/Forms.xml", componentDir+"/widget",
+            filterTokens, "${componentResourceName}Forms.xml")
+
+    logger.info("Component successfully created in folder ${rootDir}/hot-deploy/${componentName}.")
+    logger.info("Restart OFBiz and then visit the URL: https://localhost:8443/${webappName}")
+}
+
+
+// Eclipse plugin settings
+eclipse.classpath.file.whenMerged { classpath ->
+    /* The code inside this block removes unnecessary entries
+     * in the .classpath file which are generated automatically
+     * due to the settings in the sourceSets block
+     */
+    def osDirSeparator = os.contains('windows') ? '\\' : '/'
+
+    iterateOverActiveComponents { component ->
+        def componentName = component.toString() - rootDir.toString()
+        classpath.entries.removeAll { entry ->
+            // remove any "src" entries in .classpath of the form /componentName
+            entry.kind == 'src' &&
+                    entry.path ==~ '.*/+(' + componentName.tokenize(osDirSeparator).last() + ')$'
+        }
+    }
+    classpath.entries.removeAll { entry ->
+        /* remove "src" entries in .classpath named:
+         *   /framework, /applications, /specialpurpose and /hot-deploy
+         */
+        entry.kind == 'src' &&
+                entry.path ==~ /(\/+framework)$/ ||
+                entry.path ==~ /(\/+applications)$/ ||
+                entry.path ==~ /(\/+specialpurpose)$/ ||
+                entry.path ==~ /(\/+hot-deploy)$/
+    }
+    getDirectoryInActiveComponentsIfExists('config').each { configDir ->
+        /* remove any "src" entries in .classpath of the form componentName/config
+         *
+         * windows format: \framework\base\config
+         * Unix format: /framework/base/config
+         * .classpath format: framework/base/config
+         *
+         * Must convert both windows and unix to .classpath format to
+         * be able to remove it from the file
+         */
+        def relativeDir = configDir.toString() - rootDir.toString() - osDirSeparator
+        def eclipseConfigSrc = os.contains('windows') ? relativeDir.replaceAll("\\\\", "/") : relativeDir
+        classpath.entries.removeAll { entry ->
+            entry.kind == 'src' &&
+                    entry.path == eclipseConfigSrc
+        }
+    }
+}
+tasks.eclipse.dependsOn(cleanEclipse)
