@@ -1,0 +1,160 @@
+/*
+(C) Copyright 2015 Somonar B.V.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+
+ */
+
+def sysadminGroup = 'System Administration'
+
+task copyToExternalRuntimeLibs(group: sysadminGroup, type: Copy, description: 'Copy runtime libs. To be possibly used in a QA, UAT or production environment') {
+    into "$rootDir/lib"
+    from configurations.runtime
+}
+
+task createTenant(group: sysadminGroup, description: 'Create a new tenant in your environment') {
+
+    def databaseTemplateFile = "${rootDir}/framework/resources/templates/AdminNewTenantData-Derby.xml"
+
+    task prepareAndValidateTenantArguments << {
+        if(!project.hasProperty('tenantId')) {
+            throw new GradleException('Project property tenantId is missing')
+        }
+        if(!project.hasProperty('tenantName')) {
+            throw new GradleException('Project property tenantName is missing')
+        }
+        // dbPlatform values: D(Derby), M(MySQL), O(Oracle), P(PostgreSQL) (default D)
+        if(project.hasProperty('dbPlatform')) {
+            if(dbPlatform == 'D') {
+                databaseTemplateFile = "${rootDir}/framework/resources/templates/AdminNewTenantData-Derby.xml"
+            } else if(dbPlatform == 'M') {
+                databaseTemplateFile = "${rootDir}/framework/resources/templates/AdminNewTenantData-MySQL.xml"
+            } else if(dbPlatform == 'O') {
+                databaseTemplateFile = "${rootDir}/framework/resources/templates/AdminNewTenantData-Oracle.xml"
+            } else if(dbPlatform == 'P') {
+                databaseTemplateFile = "${rootDir}/framework/resources/templates/AdminNewTenantData-PostgreSQL.xml"
+            } else {
+                throw new GradleException('Invalid value for property dbPlatform: ' + "${dbPlatform}")
+            }
+        }
+    }
+
+    task generateDatabaseTemplateFile(dependsOn: prepareAndValidateTenantArguments) << {
+        def filterTokens = ['tenantId': tenantId,
+                            'tenantName': tenantName,
+                            'domainName': project.hasProperty('domainName')? "${domainName}":'org.apache.ofbiz',
+                            'db-IP': project.hasProperty('dbIp')? "${dbIp}":'',
+                            'db-User': project.hasProperty('dbUser')? "${dbUser}":'',
+                            'db-Password': project.hasProperty('dbPassword')? "${dbPassword}":'']
+
+        generateFileFromTemplate(databaseTemplateFile, 'runtime/tmp',
+                filterTokens, 'tmpFilteredTenantData.xml')
+    }
+
+    task generateAdminUserTemplateFile(dependsOn: prepareAndValidateTenantArguments) << {
+        generateFileFromTemplate(
+                "${rootDir}/framework/resources/templates/AdminUserLoginData.xml",
+                'runtime/tmp',
+                ['userLoginId': "${tenantId}-admin".toString()],
+                'tmpFilteredUserLogin.xml')
+    }
+
+    // Load the tenants master database
+    createOfbizCommandTask('loadTenantOnDefaultDelegator',
+            ['--load-data', 'file=/runtime/tmp/tmpFilteredTenantData.xml'],
+            jvmArguments, false)
+    loadTenantOnDefaultDelegator.dependsOn(generateDatabaseTemplateFile, generateAdminUserTemplateFile)
+
+    // Load the actual tenant data
+    createOfbizCommandTask('loadTenantData', [], jvmArguments, false)
+    loadTenantData.dependsOn(loadTenantOnDefaultDelegator)
+
+    // Load the tenant admin user account
+    createOfbizCommandTask('loadTenantAdminUserLogin', [], jvmArguments, false)
+    loadTenantAdminUserLogin.dependsOn(loadTenantData)
+
+    /* pass arguments to tasks, must be done this way
+     * because we are in the configuration phase. We cannot
+     * set the parameters at the execution phase. */
+    if(project.hasProperty('tenantId')) {
+        loadTenantData.args '--load-data'
+        loadTenantData.args "delegator=default#${tenantId}"
+
+        loadTenantAdminUserLogin.args '--load-data'
+        loadTenantAdminUserLogin.args "delegator=default#${tenantId}"
+        loadTenantAdminUserLogin.args '--load-data'
+        loadTenantAdminUserLogin.args "file=${rootDir}/runtime/tmp/tmpFilteredUserLogin.xml"
+    }
+    if(project.hasProperty('tenantReaders')) {
+        loadTenantData.args '--load-data'
+        loadTenantData.args "readers=${tenantReaders}"
+    }
+
+    dependsOn(loadTenantAdminUserLogin)
+
+    // cleanup
+    doLast {
+        delete("${rootDir}/runtime/tmp/tmpFilteredTenantData.xml")
+        delete("${rootDir}/runtime/tmp/tmpFilteredUserLogin.xml")
+    }
+}
+
+task loadDefault(group: sysadminGroup) {
+    dependsOn 'ofbiz --load-data'
+    description 'Load default data; meant for OFBiz development, testing, and demo purposes'
+}
+
+task loadAdminUserLogin(group: sysadminGroup) {
+    description 'Create admin user with temporary password equal to ofbiz. You must provide userLoginId'
+    createOfbizCommandTask('executeLoadAdminUser',
+            ['--load-data', 'file=/runtime/tmp/AdminUserLoginData.xml'],
+            jvmArguments, false)
+    executeLoadAdminUser.doFirst {
+        copy {
+            from ("${rootDir}/framework/resources/templates/AdminUserLoginData.xml") {
+                filter(ReplaceTokens, tokens: [userLoginId: userLoginId])
+            }
+            into "${rootDir}/runtime/tmp/"
+        }
+    }
+    dependsOn executeLoadAdminUser
+    doLast {
+        delete("${rootDir}/runtime/tmp/AdminUserLoginData.xml")
+    }
+}
+
+task loadTenant(group: sysadminGroup, description: 'Load data using tenantId') {
+
+    createOfbizCommandTask('executeLoadTenant', [], jvmArguments, false)
+
+    if(project.hasProperty('tenantId')) {
+        executeLoadTenant.args '--load-data'
+        executeLoadTenant.args "delegator=default#${tenantId}"
+    }
+    if(project.hasProperty('tenantReaders')) {
+        executeLoadTenant.args '--load-data'
+        executeLoadTenant.args "readers=${tenantReaders}"
+    }
+    if(project.hasProperty('tenantComponent')) {
+        executeLoadTenant.args '--load-data'
+        executeLoadTenant.args "component=${tenantComponent}"
+    }
+
+    executeLoadTenant.doFirst {
+        if(!project.hasProperty('tenantId')) {
+            throw new GradleException('Missing project property tenantId')
+        }
+    }
+    dependsOn executeLoadTenant
+}
+

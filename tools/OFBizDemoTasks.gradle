@@ -1,0 +1,78 @@
+/*
+(C) Copyright 2015 Somonar B.V.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+
+ */
+
+def committerGroup = 'OFBiz committers'
+
+// ========== Tasks for OFBiz committers ==========
+def websiteDir = "${rootDir}/../site"
+task copyDtds(group: committerGroup, description: 'Copy all DTDs from OFBiz instance to website') << {
+    mkdir websiteDir+'/dtds'
+    copy {
+        from(fileTree("${rootDir}").files) {
+            include '**/*.xsd'
+            exclude '**/002*.xsd'
+            exclude '**/068*.xsd'
+            exclude '**/161*.xsd'
+            exclude '**/196*.xsd'
+            exclude '**/197*.xsd'
+        }
+        into websiteDir+'/dtds'
+    }
+}
+
+task gitInfoFooter(group: committerGroup, description: 'Update the Git Branch-revision info in the footer') << {
+    def branch
+    def revision
+    def timestamp = new Date().format 'yyyy-MM-dd HH:mm:ss'
+    File gitFooterFile = new File("${rootDir}/runtime/GitInfo.ftl")
+
+    def branchOutput = new ByteArrayOutputStream()
+    exec{
+        commandLine 'git', 'rev-parse', '--abbrev-ref', 'HEAD'
+        standardOutput = branchOutput
+    }
+    branch = branchOutput.toString()
+    def revisionOutput = new ByteArrayOutputStream()
+    exec{
+        commandLine 'git', 'rev-parse', 'HEAD'
+        standardOutput = revisionOutput
+    }
+    revision = revisionOutput.toString()
+    gitFooterFile.delete()
+    gitFooterFile.createNewFile()
+    gitFooterFile << "Branch: ${branch}"
+    gitFooterFile << "Revision: ${revision}"
+    gitFooterFile << "Built on: ${timestamp}" + System.lineSeparator()
+    gitFooterFile << "Java Version: ${org.gradle.internal.jvm.Jvm.current()}"
+}
+
+task svnInfoFooter(group: committerGroup, description: 'Update the Subversion revision info in the footer') << {
+    def timestamp = new Date().format 'yyyy-MM-dd HH:mm:ss'
+    File svnFooterFile = new File("${rootDir}/runtime/SvnInfo.ftl")
+    def svnOutput = new ByteArrayOutputStream()
+    exec{
+        commandLine 'svn', 'info', '--xml'
+        standardOutput = svnOutput
+    }
+    def info = new XmlParser().parseText(svnOutput.toString())
+    svnFooterFile.delete()
+    svnFooterFile.createNewFile()
+    svnFooterFile << "Branch: ${info.entry.url.text()}" + System.lineSeparator()
+    svnFooterFile << "Revision: ${info.entry.commit.@revision}" + System.lineSeparator()
+    svnFooterFile << "Built on: ${timestamp}" + System.lineSeparator()
+    svnFooterFile << "Java Version: ${org.gradle.internal.jvm.Jvm.current()}"
+}
